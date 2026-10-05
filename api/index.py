@@ -1,12 +1,14 @@
 from fastapi import FastAPI
-app = FastAPI()
-
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 import motor.motor_asyncio
 
-MONGO_URI = mongodb+srv://salvoimpa88_db_user:Z3pavGvthxDaVwky@cluster0.lz6k120.mongodb.net/?appName=Cluster0 
+app = FastAPI()
+
+# Inserisci QUI la tua stringa di connessione di MongoDB mantenendo le virgolette
+MONGO_URI = mongodb+srv://salvoimpa88_db_user:Z3pavGvthxDaVwky@cluster0.lz6k120.mongodb.net/?appName=Cluster0
+
 client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
 db = client.aurafitness
 
@@ -33,7 +35,7 @@ async def health_check():
 
 @app.post("/api/workouts")
 async def create_workout(workout: Workout):
-    new_workout = await db.workouts.insert_one(workout.dict())
+    new_workout = await db.workouts.insert_one(workout.model_dump())
     return {"status": "success", "id": str(new_workout.inserted_id)}
 
 @app.get("/api/workouts/{device_id}")
