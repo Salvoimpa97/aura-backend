@@ -1,19 +1,15 @@
 from fastapi import FastAPI
+app = FastAPI()
+
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 import motor.motor_asyncio
 
-# Vercel cerca esattamente questa riga
-app = FastAPI()
-
-# --- CONFIGURAZIONE DATABASE ---
 MONGO_URI = mongodb+srv://salvoimpa88_db_user:Z3pavGvthxDaVwky@cluster0.lz6k120.mongodb.net/?appName=Cluster0 
-
 client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
 db = client.aurafitness
 
-# --- MODELLI DATI ---
 class Exercise(BaseModel):
     name: str
     muscle_group: str
@@ -31,7 +27,6 @@ class Workout(BaseModel):
     exercises: List[Exercise]
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-# --- ROTTE API ---
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "message": "Aura Fitness Backend Vercel Attivo!"}
