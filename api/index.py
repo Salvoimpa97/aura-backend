@@ -10,7 +10,6 @@ app = FastAPI()
 
 MONGO_URI = os.getenv("MONGO_URI")
 
-# Usiamo certifi per forzare la verifica SSL su Vercel
 if MONGO_URI:
     ca = certifi.where()
     client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI, tlsCAFile=ca)
