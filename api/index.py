@@ -4,7 +4,7 @@ from typing import List, Optional
 from datetime import datetime
 import motor.motor_asyncio
 
-app = FastAPI(title="Aura Fitness API")
+app = FastAPI()
 
 # --- CONFIGURAZIONE DATABASE ---
 # Incolla qui la tua stringa di connessione di MongoDB Atlas
