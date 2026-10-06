@@ -1,14 +1,29 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 import pymongo
 import os
 import certifi
+import google.generativeai as genai
+import json
+import io
+from pypdf import PdfReader
 
 app = FastAPI()
 
+# Configurazione CORS (Permette al frontend su Cloudflare di parlare col backend)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 MONGO_URI = os.getenv("MONGO_URI")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if MONGO_URI:
     ca = certifi.where()
@@ -17,6 +32,13 @@ if MONGO_URI:
 else:
     db = None
 
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    model = None
+
+# --- MODELLI DATI ---
 class Exercise(BaseModel):
     name: str
     muscle_group: str
@@ -33,25 +55,88 @@ class Workout(BaseModel):
     source: str = "manual"
     exercises: List[Exercise]
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    deleted_at: Optional[datetime] = None
 
+class ChatMessage(BaseModel):
+    device_id: str
+    role: str
+    content: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class AIGenerateRequest(BaseModel):
+    device_id: str
+    prompt: str
+
+# --- ENDPOINT ---
 @app.get("/api/health")
 def health_check():
-    if db is None:
-        return {"status": "warning", "message": "Backend Vercel attivo, in attesa di MongoDB..."}
-    return {"status": "ok", "message": "Aura Fitness Backend Vercel Attivo e DB Connesso Definitivamente!"}
+    return {"status": "ok", "message": "Aura Fitness API Attiva e Funzionante!"}
+
+# --- SCHEDE (WORKOUTS) ---
+@app.get("/api/workouts")
+def get_workouts(device_id: str):
+    if not db: return []
+    workouts = list(db.workouts.find({"device_id": device_id, "deleted_at": None}).sort("created_at", -1).limit(50))
+    for w in workouts: w["_id"] = str(w["_id"])
+    return workouts
 
 @app.post("/api/workouts")
 def create_workout(workout: Workout):
-    if db is None:
-        return {"status": "error", "message": "Database non connesso"}
-    new_workout = db.workouts.insert_one(workout.model_dump())
-    return {"status": "success", "id": str(new_workout.inserted_id)}
+    if not db: raise HTTPException(500, "DB non connesso")
+    res = db.workouts.insert_one(workout.model_dump())
+    return {"status": "success", "id": str(res.inserted_id)}
 
-@app.get("/api/workouts/{device_id}")
-def get_workouts(device_id: str):
-    if db is None:
-        return []
-    workouts = list(db.workouts.find({"device_id": device_id}).limit(100))
-    for w in workouts:
-        w["_id"] = str(w["_id"])
-    return workouts
+@app.post("/api/ai/generate-workout")
+def generate_workout(req: AIGenerateRequest):
+    if not model: raise HTTPException(500, "API Key mancante")
+    prompt = f"Crea una scheda di allenamento per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{\"name\": \"Nome\", \"focus\": \"Focus\", \"exercises\": [{{\"name\": \"Esercizio\", \"muscle_group\": \"Gruppo\", \"sets\": 3, \"reps\": \"10\", \"rest\": \"60s\"}}]}}"
+    res = model.generate_content(prompt).text
+    if "```json" in res: res = res.split("```json")[1].split("```")[0]
+    elif "```" in res: res = res.split("```")[1].split("```")[0]
+    
+    data = json.loads(res.strip())
+    data["device_id"] = req.device_id
+    data["source"] = "ai"
+    data["created_at"] = datetime.utcnow()
+    data["deleted_at"] = None
+    
+    if db:
+        inserted = db.workouts.insert_one(data)
+        data["_id"] = str(inserted.inserted_id)
+    return {"status": "success", "workout": data}
+
+# --- OGGI (DASHBOARD) ---
+@app.get("/api/today")
+def get_today(device_id: str):
+    if not db: return {"workout": None, "diet": None}
+    workout = db.workouts.find_one({"device_id": device_id, "deleted_at": None}, sort=[("created_at", -1)])
+    if workout: workout["_id"] = str(workout["_id"])
+    return {"workout": workout, "diet": None}
+
+# --- CHAT TRAINER AI ---
+@app.get("/api/chat/messages")
+def get_chat(device_id: str):
+    if not db: return []
+    msgs = list(db.chat.find({"device_id": device_id}).sort("created_at", 1).limit(50))
+    for m in msgs: m["_id"] = str(m["_id"])
+    return msgs
+
+@app.post("/api/chat")
+def post_chat(msg: ChatMessage):
+    if not db or not model: raise HTTPException(500, "DB o IA non connessi")
+    
+    db.chat.insert_one(msg.model_dump())
+    
+    prompt = f"Sei Aura, un personal trainer esperto e motivante. Rispondi in italiano, in modo conciso ed elegante a questo utente: {msg.content}"
+    ai_response_text = model.generate_content(prompt).text
+    
+    ai_msg = {
+        "device_id": msg.device_id,
+        "role": "assistant",
+        "content": ai_response_text.strip(),
+        "created_at": datetime.utcnow()
+    }
+    db.chat.insert_one(ai_msg)
+    
+    ai_msg["_id"] = str(ai_msg.pop("_id", ""))
+    return {"status": "success", "response": ai_msg}
