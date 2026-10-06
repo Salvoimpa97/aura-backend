@@ -32,46 +32,13 @@ if MONGO_URI:
 else:
     db = None
 
-# Cache del modello per non fare la chiamata ad ogni richiesta
-_cached_model = None
-
-def get_best_model():
-    global _cached_model
-    if _cached_model:
-        return _cached_model
-        
-    if not GEMINI_API_KEY:
-        raise Exception("API Key mancante")
-        
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode())
-            # Filtra solo i modelli che supportano la generazione di testo
-            valid_models = [m['name'].replace('models/', '') for m in data.get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', [])]
-            
-            # Cerca il modello più nuovo e veloce (es. gemini-2.5-flash, gemini-2.0-flash, o flash-latest)
-            for m in valid_models:
-                if '2.5-flash' in m or '2.0-flash' in m or 'flash-latest' in m:
-                    _cached_model = m
-                    return m
-            
-            # Se non lo trova, prende il primo disponibile
-            if valid_models:
-                _cached_model = valid_models[0]
-                return valid_models[0]
-                
-            raise Exception("Nessun modello testuale trovato per questa API Key.")
-    except Exception as e:
-        # Se la chiamata fallisce, prova direttamente con il modello più recente noto
-        return 'gemini-2.5-flash'
-
 def call_gemini(prompt):
     if not GEMINI_API_KEY:
         raise Exception("API Key mancante su Vercel")
     
-    model = get_best_model()
+    # Il modello suggerito esplicitamente dal messaggio di errore di Google
+    model = 'gemini-3.8-flash'
+    
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -115,7 +82,7 @@ class AIGenerateRequest(BaseModel):
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "message": "Backend REST 2026 Attivo!"}
+    return {"status": "ok", "message": "Backend Gemini 3.8 Attivo!"}
 
 @app.get("/api/test-chiave")
 def test_chiave():
@@ -126,12 +93,12 @@ def test_chiave():
         testo, modello_usato = call_gemini("Rispondi solo con la parola: FUNZIONA")
         return {
             "TEST SUPERATO": "Google Gemini risponde correttamente!",
-            "Modello Selezionato dal Server": modello_usato,
+            "Modello Selezionato": modello_usato,
             "Risposta": testo.strip()
         }
     except Exception as e:
         return {
-            "TEST FALLITO": "Errore finale.",
+            "TEST FALLITO": "Errore di comunicazione.",
             "Dettaglio Errore": str(e)
         }
 
@@ -150,12 +117,12 @@ def create_workout(workout: Workout):
 
 @app.post("/api/ai/generate-workout")
 def generate_workout(req: AIGenerateRequest):
-    prompt = f"Crea una scheda di allenamento per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{\"name\": \"Nome\", \"focus\": \"Focus\", \"exercises\": [{{\"name\": \"Esercizio\", \"muscle_group\": \"Gruppo\", \"sets\": 3, \"reps\": \"10\", \"rest\": \"60s\"}}]}}"
+    prompt = f"Crea una scheda di allenamento per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{"name": "Nome", "focus": "Focus", "exercises": [{{"name": "Esercizio", "muscle_group": "Gruppo", "sets": 3, "reps": "10", "rest": "60s"}}]}}"
     
     try:
         res_text, _ = call_gemini(prompt)
     except Exception as e:
-        raise HTTPException(500, f"Errore Gemini REST: {e}")
+        raise HTTPException(500, f"Errore Gemini: {e}")
 
     if "```json" in res_text: res_text = res_text.split("```json")[1].split("```")[0]
     elif "```" in res: res = res.split("```")[1].split("```")[0]
@@ -185,7 +152,7 @@ def get_today(device_id: str):
 
 @app.post("/api/ai/generate-diet")
 def generate_diet(req: AIGenerateRequest):
-    prompt = f"Crea una dieta per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{\"name\": \"Nome Dieta\", \"daily_calories\": 2000, \"protein_g\": 150, \"carbs_g\": 200, \"fat_g\": 60, \"meals\": [{{\"meal\": \"Colazione\", \"name\": \"Pancake proteici\", \"calories\": 400, \"items\": [{{\"name\": \"Avena 50g\", \"calories\": 180}}]}}]}}"
+    prompt = f"Crea una dieta per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{"name": "Nome Dieta", "daily_calories": 2000, "protein_g": 150, "carbs_g": 200, "fat_g": 60, "meals": [{{"meal": "Colazione", "name": "Pancake proteici", "calories": 400, "items": [{{"name": "Avena 50g", "calories": 180}}]}}]}}"
     
     try:
         res_text, _ = call_gemini(prompt)
