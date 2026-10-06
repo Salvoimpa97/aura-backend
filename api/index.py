@@ -28,9 +28,6 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     GEMINI_API_KEY = GEMINI_API_KEY.strip()
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-else:
-    model = None
 
 if MONGO_URI:
     ca = certifi.where()
@@ -38,6 +35,42 @@ if MONGO_URI:
     db = client.aurafitness
 else:
     db = None
+
+_active_model = None
+
+def get_ai_model():
+    global _active_model
+    if _active_model:
+        return _active_model
+    if not GEMINI_API_KEY:
+        return None
+        
+    try:
+        # Chiede a Google quali modelli sono disponibili per questa chiave esatta
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # Ordine di preferenza dei modelli
+        preferred = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro', 'models/gemini-1.0-pro']
+        selected = None
+        
+        for p in preferred:
+            if p in available_models:
+                selected = p.replace('models/', '')
+                break
+        
+        # Se nessuno dei preferiti c'è, prende il primo modello che trova
+        if not selected and available_models:
+            selected = available_models[0].replace('models/', '')
+            
+        if not selected:
+            selected = 'gemini-1.5-flash' # Ultima spiaggia
+            
+        _active_model = genai.GenerativeModel(selected)
+        print(f"MODELLO SELEZIONATO: {selected}")
+        return _active_model
+    except Exception as e:
+        print(f"Errore caricamento modelli: {e}")
+        return genai.GenerativeModel('gemini-1.5-flash')
 
 class Exercise(BaseModel):
     name: str
@@ -69,28 +102,23 @@ class AIGenerateRequest(BaseModel):
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "message": "Backend Attivo!"}
+    return {"status": "ok", "message": "Backend Autoriparabile Attivo!"}
 
-# --- NUOVA ROTTA DI TEST DIRETTO ---
 @app.get("/api/test-chiave")
 def test_chiave():
     if not GEMINI_API_KEY:
-        return {"TEST FALLITO": "La variabile GEMINI_API_KEY non esiste su Vercel."}
-    if not model:
-        return {"TEST FALLITO": "Il modello non si è caricato."}
+        return {"TEST FALLITO": "Chiave mancante"}
     
     try:
-        res = model.generate_content("Rispondi solo con la parola: FUNZIONA").text
+        ai = get_ai_model()
+        res = ai.generate_content("Rispondi solo con la parola: FUNZIONA").text
         return {
-            "TEST SUPERATO": "La tua API Key è perfetta e Gemini risponde!",
-            "Risposta da Google": res.strip(),
-            "Chiave letta (primi 5 caratteri)": GEMINI_API_KEY[:5] + "..."
+            "TEST SUPERATO": "Google Gemini risponde correttamente!",
+            "Modello Selezionato in Automatico": ai.model_name,
+            "Risposta": res.strip()
         }
     except Exception as e:
-        return {
-            "TEST FALLITO": "Vercel ha la chiave, ma Google la rifiuta.",
-            "Errore Esatto da Google": str(e)
-        }
+        return {"TEST FALLITO": str(e)}
 
 @app.get("/api/workouts")
 def get_workouts(device_id: str):
@@ -107,11 +135,12 @@ def create_workout(workout: Workout):
 
 @app.post("/api/ai/generate-workout")
 def generate_workout(req: AIGenerateRequest):
-    if not model: raise HTTPException(500, "API Key mancante")
+    ai = get_ai_model()
+    if not ai: raise HTTPException(500, "API Key mancante")
     prompt = f"Crea una scheda di allenamento per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{\"name\": \"Nome\", \"focus\": \"Focus\", \"exercises\": [{{\"name\": \"Esercizio\", \"muscle_group\": \"Gruppo\", \"sets\": 3, \"reps\": \"10\", \"rest\": \"60s\"}}]}}"
     
     try:
-        res = model.generate_content(prompt).text
+        res = ai.generate_content(prompt).text
     except Exception as e:
         raise HTTPException(500, f"Errore Gemini: {e}")
 
@@ -143,11 +172,12 @@ def get_today(device_id: str):
 
 @app.post("/api/ai/generate-diet")
 def generate_diet(req: AIGenerateRequest):
-    if not model: raise HTTPException(500, "API Key mancante")
+    ai = get_ai_model()
+    if not ai: raise HTTPException(500, "API Key mancante")
     prompt = f"Crea una dieta per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{\"name\": \"Nome Dieta\", \"daily_calories\": 2000, \"protein_g\": 150, \"carbs_g\": 200, \"fat_g\": 60, \"meals\": [{{\"meal\": \"Colazione\", \"name\": \"Pancake proteici\", \"calories\": 400, \"items\": [{{\"name\": \"Avena 50g\", \"calories\": 180}}]}}]}}"
     
     try:
-        res = model.generate_content(prompt).text
+        res = ai.generate_content(prompt).text
     except Exception as e:
         raise HTTPException(500, f"Errore API Google Gemini: {e}")
 
@@ -176,12 +206,13 @@ def get_chat(device_id: str):
 
 @app.post("/api/chat")
 def post_chat(msg: ChatMessage):
-    if not db or not model: raise HTTPException(500, "DB o IA non connessi")
+    ai = get_ai_model()
+    if not db or not ai: raise HTTPException(500, "DB o IA non connessi")
     db.chat.insert_one(msg.model_dump())
     prompt = f"Sei Aura, un personal trainer esperto e motivante. Rispondi in italiano, in modo conciso ed elegante a questo utente: {msg.content}"
     
     try:
-        ai_response_text = model.generate_content(prompt).text
+        ai_response_text = ai.generate_content(prompt).text
     except Exception as e:
         ai_response_text = "Scusa, i miei circuiti sono temporaneamente sovraccarichi. Riprova tra un istante!"
 
