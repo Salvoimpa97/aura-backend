@@ -32,37 +32,58 @@ if MONGO_URI:
 else:
     db = None
 
+# Cache del modello per non fare la chiamata ad ogni richiesta
+_cached_model = None
+
+def get_best_model():
+    global _cached_model
+    if _cached_model:
+        return _cached_model
+        
+    if not GEMINI_API_KEY:
+        raise Exception("API Key mancante")
+        
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            # Filtra solo i modelli che supportano la generazione di testo
+            valid_models = [m['name'].replace('models/', '') for m in data.get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', [])]
+            
+            # Cerca il modello più nuovo e veloce (es. gemini-2.5-flash, gemini-2.0-flash, o flash-latest)
+            for m in valid_models:
+                if '2.5-flash' in m or '2.0-flash' in m or 'flash-latest' in m:
+                    _cached_model = m
+                    return m
+            
+            # Se non lo trova, prende il primo disponibile
+            if valid_models:
+                _cached_model = valid_models[0]
+                return valid_models[0]
+                
+            raise Exception("Nessun modello testuale trovato per questa API Key.")
+    except Exception as e:
+        # Se la chiamata fallisce, prova direttamente con il modello più recente noto
+        return 'gemini-2.5-flash'
+
 def call_gemini(prompt):
     if not GEMINI_API_KEY:
         raise Exception("API Key mancante su Vercel")
     
-    # Lista di modelli dal più recente/economico al più vecchio
-    models = ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
-    last_err = ""
+    model = get_best_model()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+    headers = {'Content-Type': 'application/json'}
+    data = {"contents": [{"parts": [{"text": prompt}]}]}
+    req = urllib.request.Request(url, json.dumps(data).encode('utf-8'), headers)
     
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-        headers = {'Content-Type': 'application/json'}
-        data = {"contents": [{"parts": [{"text": prompt}]}]}
-        req = urllib.request.Request(url, json.dumps(data).encode('utf-8'), headers)
-        
-        try:
-            with urllib.request.urlopen(req, timeout=45) as response:
-                res_data = json.loads(response.read().decode())
-                return res_data['candidates'][0]['content']['parts'][0]['text'], model
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode('utf-8')
-            last_err = f"{model} -> HTTP {e.code}: {err_body}"
-            # Se è 404 (non trovato) o 400 (bad request per modello non supportato), passa al successivo
-            if e.code in [404, 400]:
-                continue
-            else:
-                raise Exception(last_err)
-        except Exception as e:
-            last_err = str(e)
-            continue
-            
-    raise Exception(f"Tutti i tentativi falliti. Ultimo errore: {last_err}")
+    try:
+        with urllib.request.urlopen(req, timeout=45) as response:
+            res_data = json.loads(response.read().decode())
+            return res_data['candidates'][0]['content']['parts'][0]['text'], model
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode('utf-8')
+        raise Exception(f"{model} -> HTTP {e.code}: {err_body}")
 
 class Exercise(BaseModel):
     name: str
@@ -94,7 +115,7 @@ class AIGenerateRequest(BaseModel):
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "message": "Backend REST puro attivo!"}
+    return {"status": "ok", "message": "Backend REST 2026 Attivo!"}
 
 @app.get("/api/test-chiave")
 def test_chiave():
@@ -105,12 +126,12 @@ def test_chiave():
         testo, modello_usato = call_gemini("Rispondi solo con la parola: FUNZIONA")
         return {
             "TEST SUPERATO": "Google Gemini risponde correttamente!",
-            "Modello Funzionante": modello_usato,
+            "Modello Selezionato dal Server": modello_usato,
             "Risposta": testo.strip()
         }
     except Exception as e:
         return {
-            "TEST FALLITO": "Nessun modello ha funzionato.",
+            "TEST FALLITO": "Errore finale.",
             "Dettaglio Errore": str(e)
         }
 
@@ -137,7 +158,7 @@ def generate_workout(req: AIGenerateRequest):
         raise HTTPException(500, f"Errore Gemini REST: {e}")
 
     if "```json" in res_text: res_text = res_text.split("```json")[1].split("```")[0]
-    elif "```" in res_text: res_text = res_text.split("```")[1].split("```")[0]
+    elif "```" in res: res = res.split("```")[1].split("```")[0]
     
     try:
         data = json.loads(res_text.strip())
@@ -172,7 +193,7 @@ def generate_diet(req: AIGenerateRequest):
         raise HTTPException(500, f"Errore API Google Gemini: {e}")
 
     if "```json" in res_text: res_text = res_text.split("```json")[1].split("```")[0]
-    elif "```" in res_text: res_text = res_text.split("```")[1].split("```")[0]
+    elif "```" in res: res = res.split("```")[1].split("```")[0]
     
     try:
         data = json.loads(res_text.strip())
