@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -8,12 +8,9 @@ import os
 import certifi
 import google.generativeai as genai
 import json
-import io
-from pypdf import PdfReader
 
 app = FastAPI()
 
-# Configurazione CORS (Permette al frontend su Cloudflare di parlare col backend)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,14 +35,13 @@ if GEMINI_API_KEY:
 else:
     model = None
 
-# --- MODELLI DATI ---
 class Exercise(BaseModel):
     name: str
     muscle_group: str
     sets: int
     reps: str
-    weight: Optional[float] = None
     rest: str
+    weight: Optional[float] = None
     notes: Optional[str] = None
 
 class Workout(BaseModel):
@@ -67,12 +63,10 @@ class AIGenerateRequest(BaseModel):
     device_id: str
     prompt: str
 
-# --- ENDPOINT ---
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "message": "Aura Fitness API Attiva e Funzionante!"}
+    return {"status": "ok", "message": "Aura Fitness API + Dieta Attiva!"}
 
-# --- SCHEDE (WORKOUTS) ---
 @app.get("/api/workouts")
 def get_workouts(device_id: str):
     if not db: return []
@@ -93,27 +87,41 @@ def generate_workout(req: AIGenerateRequest):
     res = model.generate_content(prompt).text
     if "```json" in res: res = res.split("```json")[1].split("```")[0]
     elif "```" in res: res = res.split("```")[1].split("```")[0]
-    
     data = json.loads(res.strip())
     data["device_id"] = req.device_id
     data["source"] = "ai"
     data["created_at"] = datetime.utcnow()
     data["deleted_at"] = None
-    
     if db:
         inserted = db.workouts.insert_one(data)
         data["_id"] = str(inserted.inserted_id)
     return {"status": "success", "workout": data}
 
-# --- OGGI (DASHBOARD) ---
 @app.get("/api/today")
 def get_today(device_id: str):
     if not db: return {"workout": None, "diet": None}
     workout = db.workouts.find_one({"device_id": device_id, "deleted_at": None}, sort=[("created_at", -1)])
+    diet = db.diets.find_one({"device_id": device_id}, sort=[("created_at", -1)])
     if workout: workout["_id"] = str(workout["_id"])
-    return {"workout": workout, "diet": None}
+    if diet: diet["_id"] = str(diet["_id"])
+    return {"workout": workout, "diet": diet}
 
-# --- CHAT TRAINER AI ---
+@app.post("/api/ai/generate-diet")
+def generate_diet(req: AIGenerateRequest):
+    if not model: raise HTTPException(500, "API Key mancante")
+    prompt = f"Crea una dieta per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{\"name\": \"Nome Dieta\", \"daily_calories\": 2000, \"protein_g\": 150, \"carbs_g\": 200, \"fat_g\": 60, \"meals\": [{{\"meal\": \"Colazione\", \"name\": \"Pancake proteici\", \"calories\": 400, \"items\": [{{\"name\": \"Avena 50g\", \"calories\": 180}}]}}]}}"
+    res = model.generate_content(prompt).text
+    if "```json" in res: res = res.split("```json")[1].split("```")[0]
+    elif "```" in res: res = res.split("```")[1].split("```")[0]
+    data = json.loads(res.strip())
+    data["device_id"] = req.device_id
+    data["source"] = "ai"
+    data["created_at"] = datetime.utcnow()
+    if db:
+        inserted = db.diets.insert_one(data)
+        data["_id"] = str(inserted.inserted_id)
+    return {"status": "success", "diet": data}
+
 @app.get("/api/chat/messages")
 def get_chat(device_id: str):
     if not db: return []
@@ -124,12 +132,9 @@ def get_chat(device_id: str):
 @app.post("/api/chat")
 def post_chat(msg: ChatMessage):
     if not db or not model: raise HTTPException(500, "DB o IA non connessi")
-    
     db.chat.insert_one(msg.model_dump())
-    
     prompt = f"Sei Aura, un personal trainer esperto e motivante. Rispondi in italiano, in modo conciso ed elegante a questo utente: {msg.content}"
     ai_response_text = model.generate_content(prompt).text
-    
     ai_msg = {
         "device_id": msg.device_id,
         "role": "assistant",
@@ -137,6 +142,5 @@ def post_chat(msg: ChatMessage):
         "created_at": datetime.utcnow()
     }
     db.chat.insert_one(ai_msg)
-    
     ai_msg["_id"] = str(ai_msg.pop("_id", ""))
     return {"status": "success", "response": ai_msg}
