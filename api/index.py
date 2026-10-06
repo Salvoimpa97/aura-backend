@@ -82,7 +82,7 @@ class AIGenerateRequest(BaseModel):
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "message": "Backend Gemini 3.8 Attivo!"}
+    return {"status": "ok", "message": "Backend Gemini 3.8 Attivo e Corretto!"}
 
 @app.get("/api/test-chiave")
 def test_chiave():
@@ -117,7 +117,7 @@ def create_workout(workout: Workout):
 
 @app.post("/api/ai/generate-workout")
 def generate_workout(req: AIGenerateRequest):
-    prompt = f"Crea una scheda di allenamento per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{"name": "Nome", "focus": "Focus", "exercises": [{{"name": "Esercizio", "muscle_group": "Gruppo", "sets": 3, "reps": "10", "rest": "60s"}}]}}"
+    prompt = f'''Crea una scheda di allenamento per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{"name": "Nome", "focus": "Focus", "exercises": [{{"name": "Esercizio", "muscle_group": "Gruppo", "sets": 3, "reps": "10", "rest": "60s"}}]}}'''
     
     try:
         res_text, _ = call_gemini(prompt)
@@ -125,7 +125,7 @@ def generate_workout(req: AIGenerateRequest):
         raise HTTPException(500, f"Errore Gemini: {e}")
 
     if "```json" in res_text: res_text = res_text.split("```json")[1].split("```")[0]
-    elif "```" in res: res = res.split("```")[1].split("```")[0]
+    elif "```" in res_text: res_text = res_text.split("```")[1].split("```")[0]
     
     try:
         data = json.loads(res_text.strip())
@@ -152,7 +152,7 @@ def get_today(device_id: str):
 
 @app.post("/api/ai/generate-diet")
 def generate_diet(req: AIGenerateRequest):
-    prompt = f"Crea una dieta per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{"name": "Nome Dieta", "daily_calories": 2000, "protein_g": 150, "carbs_g": 200, "fat_g": 60, "meals": [{{"meal": "Colazione", "name": "Pancake proteici", "calories": 400, "items": [{{"name": "Avena 50g", "calories": 180}}]}}]}}"
+    prompt = f'''Crea una dieta per: {req.prompt}. Rispondi SOLO in JSON strutturato così: {{"name": "Nome Dieta", "daily_calories": 2000, "protein_g": 150, "carbs_g": 200, "fat_g": 60, "meals": [{{"meal": "Colazione", "name": "Pancake proteici", "calories": 400, "items": [{{"name": "Avena 50g", "calories": 180}}]}}]}}'''
     
     try:
         res_text, _ = call_gemini(prompt)
@@ -160,7 +160,7 @@ def generate_diet(req: AIGenerateRequest):
         raise HTTPException(500, f"Errore API Google Gemini: {e}")
 
     if "```json" in res_text: res_text = res_text.split("```json")[1].split("```")[0]
-    elif "```" in res: res = res.split("```")[1].split("```")[0]
+    elif "```" in res_text: res_text = res_text.split("```")[1].split("```")[0]
     
     try:
         data = json.loads(res_text.strip())
